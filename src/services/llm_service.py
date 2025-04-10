@@ -30,18 +30,6 @@ class AbstractLLMService(abc.ABC):
         """Make an API request to the LLM provider with retry mechanism"""
         return await self._make_request_with_retry(payload, user_id)
     
-    @async_retry(
-        max_retries=config.LLM_MAX_RETRIES,
-        initial_backoff=config.LLM_INITIAL_BACKOFF,
-        max_backoff=config.LLM_MAX_BACKOFF,
-        backoff_factor=config.LLM_BACKOFF_FACTOR,
-        jitter=True,
-        retryable_exceptions=(
-            aiohttp.ClientError,
-            asyncio.TimeoutError,
-            Exception  # Consider narrowing this down to specific exceptions
-        )
-    )
     async def _make_request_with_retry(self, payload: dict, user_id: int) -> Optional[dict]:
         """Make an API request to LLM provider with retry mechanism applied"""
         logger.info(f"Making LLM API request")
@@ -57,6 +45,18 @@ class AbstractLLMService(abc.ABC):
         """Parse the response from the LLM provider"""
         pass
     
+    @async_retry(
+        max_retries=config.LLM_MAX_RETRIES,
+        initial_backoff=config.LLM_INITIAL_BACKOFF,
+        max_backoff=config.LLM_MAX_BACKOFF,
+        backoff_factor=config.LLM_BACKOFF_FACTOR,
+        jitter=True,
+        retryable_exceptions=(
+            aiohttp.ClientError,
+            asyncio.TimeoutError,
+            Exception
+        )
+    )
     async def extract_keywords(self, product_json: dict, user_id: int) -> List[str]:
         """Extract keywords from product data using LLM"""
         try:
@@ -67,13 +67,23 @@ class AbstractLLMService(abc.ABC):
             response = await self._make_request(payload, user_id)
             
             if not response:
-                return ["Ошибка получения ключевых слов"]
+                logger.error("Received empty response from LLM API")
+                raise Exception("Empty response from LLM API")
+            
+            # Log the raw response for debugging
+            logger.info(f"Raw LLM response: {json.dumps(response, ensure_ascii=False, indent=2)}")
             
             # Parse response using provider-specific parser
-            return await self._parse_response(response)
+            try:
+                return await self._parse_response(response)
+            except Exception as e:
+                # Log the error with the full response as string for debugging
+                logger.error(f"Error parsing response: {str(e)}", exc_info=True)
+                logger.error(f"Response as string: {str(response)}")
+                raise Exception(f"Error parsing LLM response: {str(e)}")
         except Exception as e:
-            print(f"Error extracting keywords: {str(e)}")
-            return ["Ошибка обработки ключевых слов"]
+            logger.error(f"Error extracting keywords: {str(e)}", exc_info=True)
+            raise
 
 
 class OpenRouterLLMService(AbstractLLMService):
@@ -163,12 +173,20 @@ class OpenRouterLLMService(AbstractLLMService):
             
             # Ensure we have the right format and count
             if isinstance(keywords, list) and len(keywords) > 0:
+                logger.info(f"Successfully parsed {len(keywords)} keywords")
                 return keywords[:self.keywords_count]
             else:
-                return ["Ошибка формата ключевых слов"]
+                logger.error("Invalid keywords format - not a list or empty list")
+                raise Exception("Invalid keywords format - not a list or empty list")
+        except KeyError as e:
+            logger.error(f"Key error in response structure: {e}, Response keys: {list(response.keys()) if response else 'None'}")
+            raise Exception(f"Key error in response structure: {e}")
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON decode error: {e}, Content: {content if 'content' in locals() else 'None'}")
+            raise Exception(f"JSON decode error: {e}")
         except Exception as e:
-            print(f"Error parsing OpenRouter response: {str(e)}")
-            return ["Ошибка обработки ключевых слов"]
+            logger.error(f"Error parsing OpenRouter response: {str(e)}, response: "+str(response))
+            raise
 
 
 class DeepSeekLLMService(AbstractLLMService):
@@ -252,18 +270,26 @@ class DeepSeekLLMService(AbstractLLMService):
         try:
             # Extract the response content (DeepSeek uses a similar format to OpenAI)
             content = response["choices"][0]["message"]["content"]
-            
+
             # Parse the JSON array
             keywords = json.loads(content)
             
             # Ensure we have the right format and count
             if isinstance(keywords, list) and len(keywords) > 0:
+                logger.info(f"Successfully parsed {len(keywords)} keywords")
                 return keywords[:self.keywords_count]
             else:
-                return ["Ошибка формата ключевых слов"]
+                logger.error("Invalid keywords format - not a list or empty list")
+                raise Exception("Invalid keywords format - not a list or empty list")
+        except KeyError as e:
+            logger.error(f"Key error in response structure: {e}, Response keys: {list(response.keys()) if response else 'None'}")
+            raise Exception(f"Key error in response structure: {e}")
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON decode error: {e}, Content: {content if 'content' in locals() else 'None'}")
+            raise Exception(f"JSON decode error: {e}")
         except Exception as e:
-            print(f"Error parsing DeepSeek response: {str(e)}")
-            return ["Ошибка обработки ключевых слов"]
+            logger.error(f"Error parsing DeepSeek response: {str(e)}, response: "+str(response))
+            raise
 
 
 def create_llm_service(proxy_service: AbstractProxyService = None) -> AbstractLLMService:

@@ -34,14 +34,21 @@ def async_retry(
         async def wrapper(*args, **kwargs) -> T:
             retries = 0
             backoff = initial_backoff
+            last_exception = None
             
             while True:
                 try:
                     return await func(*args, **kwargs)
                 except retryable_exceptions as e:
+                    last_exception = e
                     retries += 1
                     if retries > max_retries:
                         logger.error(f"Max retries ({max_retries}) exceeded. Last error: {str(e)}")
+                        # For the extract_keywords method, return error message instead of raising
+                        if func.__name__ == "extract_keywords":
+                            logger.error(f"Returning error message after all retries failed")
+                            return ["Ошибка получения ключевых слов"]
+                        # For all other methods, raise the exception as before
                         raise
                     
                     # Calculate backoff time with exponential increase
