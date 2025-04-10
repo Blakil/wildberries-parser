@@ -35,6 +35,12 @@ class Config:
     PROXY_ENABLED: bool = os.getenv("PROXY_ENABLED", "False").lower() == "true"
     PROXY_TIMEOUT_MINUTES: int = int(os.getenv("PROXY_TIMEOUT_MINUTES", "2"))
     
+    # Retry settings
+    LLM_MAX_RETRIES: int = int(os.getenv("LLM_MAX_RETRIES", "3"))
+    LLM_INITIAL_BACKOFF: float = float(os.getenv("LLM_INITIAL_BACKOFF", "2.0"))
+    LLM_MAX_BACKOFF: float = float(os.getenv("LLM_MAX_BACKOFF", "60.0"))
+    LLM_BACKOFF_FACTOR: float = float(os.getenv("LLM_BACKOFF_FACTOR", "2.0"))
+    
     # PIA Proxy settings
     PIA_BASE_HOST: str = os.getenv("PIA_BASE_HOST", "ms94o76z.proxy.piaproxy.co")
     PIA_PORT: int = int(os.getenv("PIA_PORT", "5000"))

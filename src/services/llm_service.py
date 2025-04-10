@@ -1,10 +1,16 @@
+import asyncio
 import json
 import abc
 import aiohttp
+import logging
 from typing import List, Optional, Dict, Any
 
 from src.config.config import config
 from src.services.proxy_service import AbstractProxyService, PiaProxyService
+from src.utils.retry import async_retry
+
+# Set up logging
+logger = logging.getLogger(__name__)
 
 
 class AbstractLLMService(abc.ABC):
@@ -16,9 +22,30 @@ class AbstractLLMService(abc.ABC):
         self.keywords_count = config.SEARCH_KEYWORDS_COUNT
     
     @abc.abstractmethod
-    async def _make_request(self, payload: dict, user_id: int) -> Optional[dict]:
-        """Make an API request to the LLM provider"""
+    async def _make_request_implementation(self, payload: dict, user_id: int) -> Optional[dict]:
+        """Implementation of the API request to the LLM provider"""
         pass
+    
+    async def _make_request(self, payload: dict, user_id: int) -> Optional[dict]:
+        """Make an API request to the LLM provider with retry mechanism"""
+        return await self._make_request_with_retry(payload, user_id)
+    
+    @async_retry(
+        max_retries=config.LLM_MAX_RETRIES,
+        initial_backoff=config.LLM_INITIAL_BACKOFF,
+        max_backoff=config.LLM_MAX_BACKOFF,
+        backoff_factor=config.LLM_BACKOFF_FACTOR,
+        jitter=True,
+        retryable_exceptions=(
+            aiohttp.ClientError,
+            asyncio.TimeoutError,
+            Exception  # Consider narrowing this down to specific exceptions
+        )
+    )
+    async def _make_request_with_retry(self, payload: dict, user_id: int) -> Optional[dict]:
+        """Make an API request to LLM provider with retry mechanism applied"""
+        logger.info(f"Making LLM API request")
+        return await self._make_request_implementation(payload, user_id)
     
     @abc.abstractmethod
     async def _prepare_prompt_payload(self, product_json: dict) -> dict:
@@ -59,8 +86,8 @@ class OpenRouterLLMService(AbstractLLMService):
         self.use_proxy = config.OPENROUTER_USE_PROXY
         self.base_url = "https://openrouter.ai/api/v1/chat/completions"
     
-    async def _make_request(self, payload: dict, user_id: int) -> Optional[dict]:
-        """Make an API request to OpenRouter"""
+    async def _make_request_implementation(self, payload: dict, user_id: int) -> Optional[dict]:
+        """Implementation for making an API request to OpenRouter"""
         
         # Get proxy settings if enabled    
         proxy = self.proxy_service.get_proxy(user_id) if self.use_proxy else None
@@ -70,24 +97,25 @@ class OpenRouterLLMService(AbstractLLMService):
             "Content-Type": "application/json"
         }
         
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    self.base_url,
-                    json=payload,
-                    headers=headers,
-                    proxy=proxy["url"] if proxy else None,
-                    proxy_auth=proxy["auth"] if proxy and "auth" in proxy else None,
-                    timeout=15
-                ) as response:
-                    if response.status == 200:
-                        return await response.json()
-                    else:
-                        error_text = await response.text()
-                        raise Exception(f"API error: {response.status} - {error_text}")
-        except Exception as e:
-            print(f"OpenRouter API error: {str(e)}")
-            return None
+        logger.info(f"Making OpenRouter API request with model: {self.model}")
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                self.base_url,
+                json=payload,
+                headers=headers,
+                proxy=proxy["url"] if proxy else None,
+                proxy_auth=proxy["auth"] if proxy and "auth" in proxy else None,
+                timeout=15
+            ) as response:
+                if response.status == 200:
+                    response_data = await response.json()
+                    logger.info("OpenRouter API request successful")
+                    return response_data
+                else:
+                    error_text = await response.text()
+                    logger.error(f"OpenRouter API error: {response.status} - {error_text}")
+                    raise Exception(f"API error: {response.status} - {error_text}")
     
     async def _prepare_prompt_payload(self, product_json: dict) -> dict:
         """Prepare the prompt payload for OpenRouter"""
@@ -153,8 +181,8 @@ class DeepSeekLLMService(AbstractLLMService):
         self.use_proxy = config.DEEPSEEK_USE_PROXY
         self.base_url = "https://api.deepseek.com/v1/chat/completions"
     
-    async def _make_request(self, payload: dict, user_id: int) -> Optional[dict]:
-        """Make an API request to DeepSeek"""
+    async def _make_request_implementation(self, payload: dict, user_id: int) -> Optional[dict]:
+        """Implementation for making an API request to DeepSeek"""
         
         # Get proxy settings if enabled
         proxy = self.proxy_service.get_proxy(user_id) if self.use_proxy else None
@@ -164,24 +192,25 @@ class DeepSeekLLMService(AbstractLLMService):
             "Content-Type": "application/json"
         }
         
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    self.base_url,
-                    json=payload,
-                    headers=headers,
-                    proxy=proxy["url"] if proxy else None,
-                    proxy_auth=proxy["auth"] if proxy and "auth" in proxy else None,
-                    timeout=15
-                ) as response:
-                    if response.status == 200:
-                        return await response.json()
-                    else:
-                        error_text = await response.text()
-                        raise Exception(f"API error: {response.status} - {error_text}")
-        except Exception as e:
-            print(f"DeepSeek API error: {str(e)}")
-            return None
+        logger.info(f"Making DeepSeek API request with model: {self.model}")
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                self.base_url,
+                json=payload,
+                headers=headers,
+                proxy=proxy["url"] if proxy else None,
+                proxy_auth=proxy["auth"] if proxy and "auth" in proxy else None,
+                timeout=15
+            ) as response:
+                if response.status == 200:
+                    response_data = await response.json()
+                    logger.info("DeepSeek API request successful")
+                    return response_data
+                else:
+                    error_text = await response.text()
+                    logger.error(f"DeepSeek API error: {response.status} - {error_text}")
+                    raise Exception(f"API error: {response.status} - {error_text}")
     
     async def _prepare_prompt_payload(self, product_json: dict) -> dict:
         """Prepare the prompt payload for DeepSeek"""
